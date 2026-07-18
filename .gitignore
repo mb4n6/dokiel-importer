@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Build / conversion output
+test*/
+build/
+out/
+dist/
+*.scwsp
+
+# Archive (local only: legacy code, reference exports, webview zips, planning)
+archive/
+
+# Office lock/temp files
+~$*
+
+# Editor / OS cruft
+.Rhistory
+.DS_Store
+*.dmg

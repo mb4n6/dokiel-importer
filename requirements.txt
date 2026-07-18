@@ -1,0 +1,23 @@
+# Python dependencies
+#
+# Install with:
+#   pip install -r requirements.txt
+# On macOS with system Python (externally managed):
+#   pip install -r requirements.txt --break-system-packages
+#
+# stdlib imports (argparse, json, os, re, zipfile, urllib, hashlib, …) need no install.
+
+# PPTX extraction — runs/fonts, speaker notes, group shapes, tables
+python-pptx>=1.0.0
+
+# DOCX extraction — headings-as-slides, lists, tables, monospace-as-code
+python-docx>=1.0.0
+
+# PDF fallback — PyMuPDF (imported as fitz), dict mode for font size/name
+PyMuPDF>=1.24.0
+
+# XML well-formedness verification (converter/ emission is string-based)
+lxml>=5.0.0
+
+# Translation (optional) uses a LOCAL Ollama server over HTTP via urllib —
+# no extra Python package. Run:  ollama serve && ollama pull gemma4:latest
