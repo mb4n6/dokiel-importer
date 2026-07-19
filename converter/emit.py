@@ -40,6 +40,8 @@ def _seg_inline(seg: Segment) -> str:
     t = _x(seg.text)
     if seg.kind in ("code", "inline_cmd"):
         return f'<sc:inlineStyle role="cmd">{t}</sc:inlineStyle>'
+    if seg.kind == "term":
+        return f'<sc:inlineStyle role="term">{t}</sc:inlineStyle>'
     if seg.kind == "path":
         return f'<sc:inlineStyle role="filePath">{t}</sc:inlineStyle>'
     if seg.emphasis:
@@ -79,6 +81,8 @@ def _table(rows: list[list[list[Segment]]]) -> str:
 def _render_type(seg: Segment) -> str:
     if seg.kind in ("code", "inline_cmd"):
         return "cmd"
+    if seg.kind == "term":
+        return "term"
     if seg.kind == "path":
         return "path"
     return "em" if seg.emphasis else "plain"
@@ -108,6 +112,8 @@ def _line_inline(segs: list[Segment]) -> str:
         t = _x(text)
         if rt == "cmd":
             out.append(f'<sc:inlineStyle role="cmd">{t}</sc:inlineStyle>')
+        elif rt == "term":
+            out.append(f'<sc:inlineStyle role="term">{t}</sc:inlineStyle>')
         elif rt == "path":
             out.append(f'<sc:inlineStyle role="filePath">{t}</sc:inlineStyle>')
         elif rt == "em":

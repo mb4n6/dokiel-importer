@@ -54,25 +54,34 @@ def _is_cmd_color(run) -> bool:
     return False
 
 
-def _para_segments(paragraph, font_code: bool = True) -> tuple[list[Segment], bool]:
-    """Return (segments, all_code) for one paragraph.
+def _para_segments(paragraph, font_code: bool = True, terms: bool = False) -> tuple[list[Segment], bool]:
+    """Return (segments, all_literal) for one paragraph.
 
-    A run is code when it is painted in a command colour, and, if font_code is on,
-    also when its font is monospace. Decks that mark commands by colour turn
-    font_code off so ordinary monospace text is not mistaken for a command.
+    A run painted in a command colour becomes a command. With terms on, a
+    monospace run in the default colour becomes a term. Otherwise, when font_code
+    is on, a monospace run becomes a command. all_literal is True when every
+    non-blank run is command or term, which can promote the frame to a code figure.
     """
     segs: list[Segment] = []
-    code_flags: list[bool] = []
+    lit_flags: list[bool] = []
     for run in paragraph.runs:
         text = run.text
         if not text:
             continue
-        is_code = _is_cmd_color(run) or (font_code and _is_mono(run.font.name))
+        mono = _is_mono(run.font.name)
+        if _is_cmd_color(run):
+            kind = "code"
+        elif terms and mono:
+            kind = "term"
+        elif not terms and font_code and mono:
+            kind = "code"
+        else:
+            kind = "prose"
         emph = bool(run.font.bold or run.font.italic)
-        segs.append(Segment(text=text, kind="code" if is_code else "prose", emphasis=emph))
+        segs.append(Segment(text=text, kind=kind, emphasis=emph))
         if text.strip():
-            code_flags.append(is_code)
-    return segs, (bool(code_flags) and all(code_flags))
+            lit_flags.append(kind in ("code", "term"))
+    return segs, (bool(lit_flags) and all(lit_flags))
 
 
 def _deck_uses_cmd_color(prs) -> bool:
@@ -114,7 +123,8 @@ def _title_from_slide(slide) -> tuple[str, int | None]:
 def _merge_prose(segs: list[Segment]) -> str:
     return "".join(s.text for s in segs)
 
-def _extract_text_frame(tf, blocks: list[Block], font_code: bool = True) -> None:
+def _extract_text_frame(tf, blocks: list[Block], font_code: bool = True,
+                        terms: bool = False) -> None:
     """One source text frame -> exactly one block (analogous to one slide box).
 
     A frame whose paragraphs are all code and span >=2 lines becomes a code figure
@@ -123,7 +133,7 @@ def _extract_text_frame(tf, blocks: list[Block], font_code: bool = True) -> None
     """
     lines: list[tuple[int, list[Segment], bool]] = []
     for paragraph in tf.paragraphs:
-        segs, all_mono = _para_segments(paragraph, font_code)
+        segs, all_mono = _para_segments(paragraph, font_code, terms)
         if not _merge_prose(segs).strip():
             continue
         lines.append((paragraph.level or 0, segs, all_mono))
@@ -135,14 +145,15 @@ def _extract_text_frame(tf, blocks: list[Block], font_code: bool = True) -> None
     else:
         blocks.append(Block(kind="flow", lines=[(lvl, segs) for lvl, segs, _ in lines]))
 
-def _extract_table(shape, blocks: list[Block], font_code: bool = True) -> None:
+def _extract_table(shape, blocks: list[Block], font_code: bool = True,
+                   terms: bool = False) -> None:
     rows: list[list[list[Segment]]] = []
     for r in shape.table.rows:
         row: list[list[Segment]] = []
         for cell in r.cells:
             cell_segs: list[Segment] = []
             for paragraph in cell.text_frame.paragraphs:
-                segs, _ = _para_segments(paragraph, font_code)
+                segs, _ = _para_segments(paragraph, font_code, terms)
                 if _merge_prose(segs).strip():
                     cell_segs.extend(segs)
                     cell_segs.append(Segment(text="\n", kind="prose"))
@@ -193,16 +204,19 @@ def _extract_chart(shape, blocks: list[Block]) -> bool:
 
 def _walk(shapes, slide_idx: int, blocks: list[Block], images: list[Image],
           seen_hashes: dict[str, str], title_id, warnings: list[str],
-          font_code: bool = True) -> None:
+          font_code: bool = True, terms: bool = False, order: str = "document") -> None:
+    if order == "position":
+        shapes = sorted(shapes, key=lambda sh: (sh.top if sh.top is not None else 10**9,
+                                                sh.left if sh.left is not None else 0))
     for shape in shapes:
         if title_id is not None and shape.shape_id == title_id:
             continue
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
             _walk(shape.shapes, slide_idx, blocks, images, seen_hashes, title_id,
-                  warnings, font_code)
+                  warnings, font_code, terms, order)
             continue
         if shape.has_table:
-            _extract_table(shape, blocks, font_code)
+            _extract_table(shape, blocks, font_code, terms)
             continue
         if getattr(shape, "has_chart", False):
             if not _extract_chart(shape, blocks):
@@ -223,7 +237,7 @@ def _walk(shapes, slide_idx: int, blocks: list[Block], images: list[Image],
             txt = shape.text_frame.text
             if _PAGENO_RE.match(txt):
                 continue
-            _extract_text_frame(shape.text_frame, blocks, font_code)
+            _extract_text_frame(shape.text_frame, blocks, font_code, terms)
             continue
         if str(shape.shape_type) == "MEDIA (16)" or getattr(shape.shape_type, "name", "") == "MEDIA":
             warnings.append(f"slide {slide_idx + 1}: embedded media (video/audio) not imported")
@@ -243,7 +257,8 @@ def _notes(slide) -> str:
         pass
     return ""
 
-def extract(path: str, command_mode: str = "auto") -> Deck:
+def extract(path: str, command_mode: str = "auto", terms: bool = False,
+            order: str = "document") -> Deck:
     prs = Presentation(path)
     deck = Deck(title="", source_lang="en")
     # command detection: colour is always used; the monospace font is used unless
@@ -260,7 +275,8 @@ def extract(path: str, command_mode: str = "auto") -> Deck:
         title, title_id = _title_from_slide(slide)
         blocks: list[Block] = []
         images: list[Image] = []
-        _walk(slide.shapes, i, blocks, images, seen_hashes, title_id, deck.warnings, font_code)
+        _walk(slide.shapes, i, blocks, images, seen_hashes, title_id, deck.warnings,
+              font_code, terms, order)
         existing = " ".join(b.text() for b in blocks)
         for rel in slide.part.rels.values():
             try:

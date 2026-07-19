@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SEGMENT_KINDS = ("prose", "code", "inline_cmd", "path")
+SEGMENT_KINDS = ("prose", "code", "inline_cmd", "path", "term")
 
 BLOCK_KINDS = ("heading", "para", "list", "olist", "flow", "code", "table")
 

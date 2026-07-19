@@ -94,6 +94,9 @@ What `python-pptx` cannot read is reported rather than dropped silently:
 | `--exercises` | off | slides with an exercise title become `dk:exercise` (exposition only, order kept) |
 | `--pub` | off | also produce a `dk:trainingRoot` publication descriptor |
 | `--batch` | off | input is a folder (one session per file) |
+| `--commands` | `auto` | command detection: `auto` (colour if the deck uses it, else font), `color`, `font`, `both` |
+| `--terms` | off | mark monospace text in the default colour as term (`role="term"`) |
+| `--reading-order` | `document` | `document` keeps the file order; `position` sorts shapes top-to-bottom, left-to-right |
 | `--translate` | off | translate prose to English (needs Ollama) |
 | `--source-lang` | `de` | source language for translation |
 | `--model` / `--host` | `gemma4:latest` / localhost | Ollama model and host |
