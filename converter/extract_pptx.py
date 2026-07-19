@@ -54,40 +54,76 @@ def _is_cmd_color(run) -> bool:
     return False
 
 
-def _para_segments(paragraph) -> tuple[list[Segment], bool]:
-    """Return (segments, all_mono) for one paragraph.
+def _para_segments(paragraph, font_code: bool = True) -> tuple[list[Segment], bool]:
+    """Return (segments, all_code) for one paragraph.
 
-    A run becomes code when its font is monospace or it is painted in a command
-    colour (CMD_SCHEME_COLORS); code runs render inline as a command. Bold/italic
-    runs get emphasis. all_mono is True when every non-blank run is code, which
-    promotes a whole text frame to a code figure.
+    A run is code when it is painted in a command colour, and, if font_code is on,
+    also when its font is monospace. Decks that mark commands by colour turn
+    font_code off so ordinary monospace text is not mistaken for a command.
     """
     segs: list[Segment] = []
-    mono_flags: list[bool] = []
+    code_flags: list[bool] = []
     for run in paragraph.runs:
         text = run.text
         if not text:
             continue
-        is_code = _is_mono(run.font.name) or _is_cmd_color(run)
+        is_code = _is_cmd_color(run) or (font_code and _is_mono(run.font.name))
         emph = bool(run.font.bold or run.font.italic)
         segs.append(Segment(text=text, kind="code" if is_code else "prose", emphasis=emph))
         if text.strip():
-            mono_flags.append(is_code)
-    return segs, (bool(mono_flags) and all(mono_flags))
+            code_flags.append(is_code)
+    return segs, (bool(code_flags) and all(code_flags))
+
+
+def _deck_uses_cmd_color(prs) -> bool:
+    """True when any run in the deck is painted in a command colour."""
+    def walk(shapes):
+        for sh in shapes:
+            try:
+                if sh.shape_type == MSO_SHAPE_TYPE.GROUP:
+                    if walk(sh.shapes):
+                        return True
+                    continue
+            except Exception:
+                pass
+            if sh.has_text_frame:
+                for para in sh.text_frame.paragraphs:
+                    for run in para.runs:
+                        if run.text.strip() and _is_cmd_color(run):
+                            return True
+        return False
+    return any(walk(s.shapes) for s in prs.slides)
+
+
+def _title_from_slide(slide) -> tuple[str, int | None]:
+    """Title text and shape id from the title placeholder (p:ph type title/ctrTitle).
+
+    Reads the placeholder by its type attribute, which is more reliable on messy
+    decks than python-pptx's slide.shapes.title.
+    """
+    sps = slide._element.xpath(
+        ".//p:sp[.//p:ph[@type='title'] or .//p:ph[@type='ctrTitle']]")
+    if not sps:
+        return "", None
+    sp = sps[0]
+    title = re.sub(r"\s+", " ", "".join(sp.xpath(".//a:t/text()"))).strip()
+    ids = sp.xpath(".//p:cNvPr/@id")
+    sid = int(ids[0]) if ids else None
+    return title, sid
 
 def _merge_prose(segs: list[Segment]) -> str:
     return "".join(s.text for s in segs)
 
-def _extract_text_frame(tf, blocks: list[Block]) -> None:
+def _extract_text_frame(tf, blocks: list[Block], font_code: bool = True) -> None:
     """One source text frame -> exactly one block (analogous to one slide box).
 
-    A frame whose paragraphs are all monospace and span >=2 lines becomes a code
-    figure (e.g. a terminal dump). Everything else becomes a single `flow` block: a
-    nested bullet list that keeps indent levels and shows inline commands in place.
+    A frame whose paragraphs are all code and span >=2 lines becomes a code figure
+    (e.g. a terminal dump). Everything else becomes a single `flow` block: a nested
+    bullet list that keeps indent levels and shows inline commands in place.
     """
     lines: list[tuple[int, list[Segment], bool]] = []
     for paragraph in tf.paragraphs:
-        segs, all_mono = _para_segments(paragraph)
+        segs, all_mono = _para_segments(paragraph, font_code)
         if not _merge_prose(segs).strip():
             continue
         lines.append((paragraph.level or 0, segs, all_mono))
@@ -99,14 +135,14 @@ def _extract_text_frame(tf, blocks: list[Block]) -> None:
     else:
         blocks.append(Block(kind="flow", lines=[(lvl, segs) for lvl, segs, _ in lines]))
 
-def _extract_table(shape, blocks: list[Block]) -> None:
+def _extract_table(shape, blocks: list[Block], font_code: bool = True) -> None:
     rows: list[list[list[Segment]]] = []
     for r in shape.table.rows:
         row: list[list[Segment]] = []
         for cell in r.cells:
             cell_segs: list[Segment] = []
             for paragraph in cell.text_frame.paragraphs:
-                segs, _ = _para_segments(paragraph)
+                segs, _ = _para_segments(paragraph, font_code)
                 if _merge_prose(segs).strip():
                     cell_segs.extend(segs)
                     cell_segs.append(Segment(text="\n", kind="prose"))
@@ -156,15 +192,17 @@ def _extract_chart(shape, blocks: list[Block]) -> bool:
     return False
 
 def _walk(shapes, slide_idx: int, blocks: list[Block], images: list[Image],
-          seen_hashes: dict[str, str], title_id, warnings: list[str]) -> None:
+          seen_hashes: dict[str, str], title_id, warnings: list[str],
+          font_code: bool = True) -> None:
     for shape in shapes:
         if title_id is not None and shape.shape_id == title_id:
             continue
         if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-            _walk(shape.shapes, slide_idx, blocks, images, seen_hashes, title_id, warnings)
+            _walk(shape.shapes, slide_idx, blocks, images, seen_hashes, title_id,
+                  warnings, font_code)
             continue
         if shape.has_table:
-            _extract_table(shape, blocks)
+            _extract_table(shape, blocks, font_code)
             continue
         if getattr(shape, "has_chart", False):
             if not _extract_chart(shape, blocks):
@@ -185,7 +223,7 @@ def _walk(shapes, slide_idx: int, blocks: list[Block], images: list[Image],
             txt = shape.text_frame.text
             if _PAGENO_RE.match(txt):
                 continue
-            _extract_text_frame(shape.text_frame, blocks)
+            _extract_text_frame(shape.text_frame, blocks, font_code)
             continue
         if str(shape.shape_type) == "MEDIA (16)" or getattr(shape.shape_type, "name", "") == "MEDIA":
             warnings.append(f"slide {slide_idx + 1}: embedded media (video/audio) not imported")
@@ -205,24 +243,24 @@ def _notes(slide) -> str:
         pass
     return ""
 
-def extract(path: str) -> Deck:
+def extract(path: str, command_mode: str = "auto") -> Deck:
     prs = Presentation(path)
     deck = Deck(title="", source_lang="en")
+    # command detection: colour is always used; the monospace font is used unless
+    # the deck marks commands by colour (auto), or the caller forces a mode.
+    if command_mode == "color":
+        font_code = False
+    elif command_mode in ("font", "both"):
+        font_code = True
+    else:
+        font_code = not _deck_uses_cmd_color(prs)
     seen_hashes: dict[str, str] = {}
     for i, slide in enumerate(prs.slides):
-        title_shape = None
-        try:
-            title_shape = slide.shapes.title
-        except Exception:
-            title_shape = None
-        title_id = title_shape.shape_id if title_shape is not None else None
-        raw_title = (title_shape.text
-                     if title_shape is not None and title_shape.has_text_frame else "")
-        # keep the whole title placeholder so a wrapped title is not cut off
-        title = re.sub(r"\s+", " ", raw_title).strip()
+        # title from the title placeholder (by type), not python-pptx's guess
+        title, title_id = _title_from_slide(slide)
         blocks: list[Block] = []
         images: list[Image] = []
-        _walk(slide.shapes, i, blocks, images, seen_hashes, title_id, deck.warnings)
+        _walk(slide.shapes, i, blocks, images, seen_hashes, title_id, deck.warnings, font_code)
         existing = " ".join(b.text() for b in blocks)
         for rel in slide.part.rels.values():
             try:
